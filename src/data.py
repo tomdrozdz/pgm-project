@@ -67,25 +67,29 @@ def split_data(data, without_cols: t.List[str], scale: t.Optional[str] = None):
     return (x_train, y[train_index]), (x_test, y[test_index])
 
 
-def _batch(x, y, seq_len):
+def _batch(x, y, seq_len, overlap_series):
     xs = []
     ys = []
-    bot = 0
-    top = 0 + seq_len
 
-    while top <= len(x):
-        xs.append(x.iloc[bot:top].values)
-        ys.append(y.iloc[bot:top].values)
-        bot += seq_len
-        top += seq_len
+    if overlap_series:
+        xs = [x.iloc[i:i+seq_len].to_numpy() for i in range(0, len(x)-seq_len)]
+        ys = [y.iloc[i:i+seq_len].to_numpy() for i in range(0, len(x)-seq_len)]
+    else:
+        bot = 0
+        top = 0 + seq_len
+        while top <= len(x):
+            xs.append(x.iloc[bot:top].values)
+            ys.append(y.iloc[bot:top].values)
+            bot += seq_len
+            top += seq_len
 
     return torch.from_numpy(np.array(xs)).float(), torch.from_numpy(np.array(ys))
 
 
-def batch_dataset(dataset, sequence_length=25):
+def batch_dataset(dataset, sequence_length=25, overlap_series=False):
     (x_train, y_train), (x_test, y_test) = dataset
 
-    x_tr, y_tr = _batch(x_train, y_train, seq_len=sequence_length)
-    x_te, y_te = _batch(x_test, y_test, seq_len=sequence_length)
+    x_tr, y_tr = _batch(x_train, y_train, seq_len=sequence_length, overlap_series=overlap_series)
+    x_te, y_te = _batch(x_test, y_test, seq_len=sequence_length, overlap_series=overlap_series)
 
     return (x_tr, y_tr), (x_te, y_te)
