@@ -1,10 +1,11 @@
 import numpy as np
 import torch
+from matplotlib import pyplot as plt
 from sklearn.metrics import f1_score, classification_report
 from torch import nn
 import pandas as pd
 from torch.nn.functional import softmax, one_hot
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
 
@@ -182,3 +183,42 @@ def train_mcdlstm(model: MCDLSTM, train_dl: DataLoader,
     return dev_loss_min, dev_r2_min_loss, dev_f1_min_loss, dev_report_min_loss
 
 
+def visualise_regr_results(regr_model, x, y, device='cpu'):
+    test_ds = TensorDataset(x, y)
+    test_dl = DataLoader(test_ds, batch_size=64, shuffle=False)
+
+    outs = []
+    ys = []
+    for x, y in test_dl:
+        outs.append(np.array(regr_model.estimate_distributions(x.to(device), n_samples=100)).transpose())
+        ys.extend(y.numpy()[:,-1])
+
+    outs = np.vstack(outs)
+    outs_df = pd.DataFrame({'mean': outs[:,0], 'std': outs[:,1], 'trues': ys})
+
+    plt.plot(outs_df.index, outs_df['mean'], label='pred')
+    plt.plot(outs_df.index, outs_df['trues'], label='true')
+    plt.fill_between(outs_df.index, y1=outs_df['mean']-outs_df['std'],
+                     y2=outs_df['mean'] + outs_df['std'], alpha=.5)
+    plt.legend()
+
+
+def visualise_clf_results(clf_model, x, y, device='cpu'):
+    test_ds = TensorDataset(x, y)
+    test_dl = DataLoader(test_ds, batch_size=64, shuffle=False)
+    outs = []
+    ys = []
+    for x, y in test_dl:
+        outs.append(np.array(clf_model.estimate_distributions(x.to(device), n_samples=100)))
+        ys.extend(y.numpy()[:,-1])
+
+    outs = np.vstack(outs)
+
+    outs_df = pd.DataFrame({'pred': np.argmax(outs, axis=1),
+                            'proba': np.max(outs, axis=1),
+                            'true': ys})
+
+    plt.plot(outs_df.index, outs_df['pred'], label='true')
+    plt.plot(outs_df.index, outs_df['true'], label='pred')
+    plt.bar(outs_df.index, outs_df['proba'], color='gray', alpha=.5, label='pred probability')
+    plt.legend()
