@@ -199,7 +199,9 @@ def visualise_regr_results(regr_model, x, y, device='cpu'):
     plt.plot(outs_df.index, outs_df['mean'], label='pred')
     plt.plot(outs_df.index, outs_df['trues'], label='true')
     plt.fill_between(outs_df.index, y1=outs_df['mean']-outs_df['std'],
-                     y2=outs_df['mean'] + outs_df['std'], alpha=.5)
+                     y2=outs_df['mean'] + outs_df['std'], alpha=.5, color='lightblue')
+    plt.fill_between(outs_df.index, y1=outs_df['mean']-2*outs_df['std'],
+                     y2=outs_df['mean'] + 2*outs_df['std'], alpha=.25, color='lightblue')
     plt.legend()
 
 
