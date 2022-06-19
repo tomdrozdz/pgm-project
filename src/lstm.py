@@ -1,12 +1,17 @@
+import time
+
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
 from sklearn.metrics import f1_score, classification_report
+from sklearn.preprocessing import MinMaxScaler
 from torch import nn
 import pandas as pd
 from torch.nn.functional import softmax, one_hot
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
+
+from src.data import batch_dataset
 
 
 class MCDLSTM(nn.Module):
@@ -66,7 +71,7 @@ def train_mcdlstm(model: MCDLSTM, train_dl: DataLoader,
                   patience=10,
                   print_chart=False, save_chart=False, print_progress=True,
                   device='cpu', bce_weights=None, regression=False,
-                  clip_grad=None):
+                  clip_grad=None, progress_bar=True):
 
     if regression:
         loss_f = nn.MSELoss()
@@ -89,7 +94,12 @@ def train_mcdlstm(model: MCDLSTM, train_dl: DataLoader,
     train_r2s_epoch = []
     dev_r2s_epoch = []
 
-    for epoch in tqdm(range(epochs)):
+    if progress_bar:
+        epoch_range = tqdm(range(epochs))
+    else:
+        epoch_range = range(epochs)
+
+    for epoch in epoch_range:
         train_losses = []
         train_y = []
         model.train()
@@ -158,7 +168,7 @@ def train_mcdlstm(model: MCDLSTM, train_dl: DataLoader,
         dev_r2 = 1-dev_loss/np.var(dev_y)
         dev_r2s_epoch.append(dev_r2)
 
-        dev_round_mse = mse_loss(torch.tensor(dev_preds).round(), torch.tensor(dev_y))
+        dev_round_mse = mse_loss(torch.tensor(dev_preds).round(), torch.tensor(dev_y)).item()
         dev_f1 = f1_score(np.rint(dev_y), np.rint(dev_preds), average='macro', zero_division=0)
 
         dev_report = classification_report(np.rint(dev_y), np.rint(dev_preds), zero_division=0)
@@ -201,6 +211,9 @@ def train_mcdlstm(model: MCDLSTM, train_dl: DataLoader,
         if save_chart:
             fig1.savefig(save_prefix+'_mse.png')
             fig2.savefig(save_prefix+'_r2.png')
+        if not print_chart:
+            plt.close(fig1)
+            plt.close(fig2)
 
     return dev_round_mse_min_loss, dev_r2_min_loss, dev_f1_min_loss, dev_report_min_loss
 
@@ -246,3 +259,44 @@ def visualise_clf_results(clf_model, x, y, device='cpu'):
     plt.plot(outs_df.index, outs_df['true'], label='true')
     plt.bar(outs_df.index, outs_df['proba'], color='gray', alpha=.5, label='pred probability')
     plt.legend()
+
+
+def evaluate_hparams(data_series, sequence_length=10, no_layers=3,
+                     hidden_dim=64, drop_prob=0.5, regression=False,
+                     batch_size=32, epochs=200, patience=10, lr=0.00001, silent=False):
+    f1_vals = []
+    mse_vals = []
+    scaler = MinMaxScaler()
+    for s in data_series:
+
+        s = (pd.DataFrame(scaler.fit_transform(s[0][0])), s[0][1]), (pd.DataFrame(scaler.transform(s[1][0])), s[1][1])
+        (seq_x_train, seq_y_train), (seq_x_test, seq_y_test) = batch_dataset(s, sequence_length=sequence_length, overlap_series=True)
+
+        device = 'cuda:0'
+
+        train_ds = TensorDataset(seq_x_train, seq_y_train)
+        train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+
+        test_ds = TensorDataset(seq_x_test, seq_y_test)
+        test_dl = DataLoader(test_ds, batch_size=batch_size, shuffle=True)
+
+        out_dim = 1 if regression else 4
+        mcdLSTM = MCDLSTM(no_layers=no_layers, input_size=12, hidden_dim=hidden_dim, output_dim=out_dim, drop_prob=drop_prob, device=device).to(device)
+
+        save_prefix = 'models/' + ('regr_' if regression else 'clf_') + str(int(time.time()))
+
+        mse, r2, f1, report = train_mcdlstm(mcdLSTM, train_dl, test_dl, regression=regression,
+                                            epochs=epochs, lr=lr, patience=patience,
+                                            save_prefix=save_prefix, save_chart=True,
+                                            print_chart=False, print_progress=False, progress_bar=not silent,
+                                            device=device)
+
+        if not silent:
+            print(f'MSE: {mse:.3f}, r2: {r2:.3f}, f1 macro: {f1:.3f}')
+            print(report)
+
+        f1_vals.append(f1)
+        mse_vals.append(mse)
+    if not silent:
+        print(f'Avg mse: {np.mean(mse_vals)}, f1: {np.mean(f1_vals)}')
+    return mse_vals, f1_vals, save_prefix
