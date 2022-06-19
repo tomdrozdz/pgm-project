@@ -2,6 +2,7 @@ import typing as t
 
 import matplotlib.pyplot as plt
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import torch
 from sklearn.metrics import classification_report, f1_score
@@ -538,3 +539,28 @@ def plot_predict_crf(
             "pred": y_pred.cpu(),
         }
     ).plot(lw=0.7, figsize=(10, 5))
+
+
+def plot_transitions(transitions: t.List[npt.NDArray]):
+    """Display how transitions weights changed throughout training.
+
+    .. note: we limit ourselves to only 7 first labels for the sake of performance
+        and do not consider padding axis (it is not trained)
+    """
+    size = min(transitions[0].shape[0] - 1, 7)
+    fig, axes = plt.subplots(size, size, sharex=True, sharey=True, figsize=(10, 10))
+
+    x = list(range(len(transitions)))
+    t = np.array(transitions).transpose(1, 2, 0)[:size, :size]
+
+    for ax_row, val_row in zip(axes, t):
+        for ax, val in zip(ax_row, val_row):
+            ax.plot(x, val)
+
+    for i, ax in enumerate(axes[-1, :]):
+        ax.set_xlabel(i)
+
+    for i, ax in enumerate(axes[:, 0]):
+        ax.set_ylabel(i)
+
+    plt.show()
