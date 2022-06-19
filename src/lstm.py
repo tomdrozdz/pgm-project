@@ -63,7 +63,8 @@ class MCDLSTM(nn.Module):
 
 def train_mcdlstm(model: MCDLSTM, train_dl: DataLoader,
                   dev_dl: DataLoader, epochs, lr, save_prefix,
-                  patience=10, print_chart=False, print_progress=True,
+                  patience=10,
+                  print_chart=False, save_chart=False, print_progress=True,
                   device='cpu', bce_weights=None, regression=False,
                   clip_grad=None):
 
@@ -185,11 +186,21 @@ def train_mcdlstm(model: MCDLSTM, train_dl: DataLoader,
     best_state = torch.load(save_prefix + '_state_dict.pt')
     model.load_state_dict(best_state)
 
-    if print_chart:
-        df_mse = pd.DataFrame({'train_loss': train_losses_epoch, 'dev_loss': dev_losses_epoch, })
-        df_r2 = pd.DataFrame({'train_r2': train_r2s_epoch, 'dev_r2': dev_r2s_epoch})
-        df_mse.plot.line()
-        df_r2.plot.line()
+    if print_chart or save_chart:
+        df_loss = pd.DataFrame({'train': train_losses_epoch, 'dev': dev_losses_epoch, })
+        df_r2 = pd.DataFrame({'train': train_r2s_epoch, 'dev': dev_r2s_epoch})
+        model_type = 'regression' if regression else 'classification'
+        ax1 = df_loss.plot.line(title=f'Learning curves for {model_type} model')
+        ax1.set_xlabel('epoch')
+        ax1.set_ylabel('loss')
+        fig1 = ax1.get_figure()
+        ax2 = df_r2.plot.line(title=f'R2 values for {model_type} model')
+        ax2.set_xlabel('epoch')
+        ax2.set_ylabel('R2')
+        fig2 = ax2.get_figure()
+        if save_chart:
+            fig1.savefig(save_prefix+'_mse.png')
+            fig2.savefig(save_prefix+'_r2.png')
 
     return dev_round_mse_min_loss, dev_r2_min_loss, dev_f1_min_loss, dev_report_min_loss
 
