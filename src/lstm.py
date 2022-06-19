@@ -27,7 +27,14 @@ class MCDLSTM(nn.Module):
         self.activation = nn.ReLU()
 
     def forward(self, x, hidden=None):
-        lstm_out, hidden = self.lstm(x, hidden)
+        if hidden is None and x.shape[0] > 1:
+            lstm_out = torch.zeros((x.shape[0], x.shape[1], self.hidden_dim)).to(self.device)
+            for i in range(x.shape[0]):
+                single_out, last_hidden = self.lstm(x[i, :, :], hidden)
+                lstm_out[i, :, :] = single_out
+            hidden = last_hidden
+        else:
+            lstm_out, hidden = self.lstm(x, hidden)
 
         out = lstm_out[:, -1, :]
         out = self.dropout(out)
@@ -136,6 +143,8 @@ def train_mcdlstm(model: MCDLSTM, train_dl: DataLoader,
             else:
                 dev_y.extend(y.squeeze().cpu().numpy())
                 if regression:
+                    dev_preds.extend(output.float().cpu().numpu())
+                else:
                     dev_preds.extend(torch.argmax(output, dim=1).float().cpu().numpy())
 
         train_loss = np.mean(train_losses)
