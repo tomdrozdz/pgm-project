@@ -199,9 +199,9 @@ def visualise_regr_results(regr_model, x, y, device='cpu'):
     plt.plot(outs_df.index, outs_df['mean'], label='pred')
     plt.plot(outs_df.index, outs_df['trues'], label='true')
     plt.fill_between(outs_df.index, y1=outs_df['mean']-outs_df['std'],
-                     y2=outs_df['mean'] + outs_df['std'], alpha=.5, color='lightblue')
+                     y2=outs_df['mean'] + outs_df['std'], alpha=.5, color='lightblue', label='1σ range')
     plt.fill_between(outs_df.index, y1=outs_df['mean']-2*outs_df['std'],
-                     y2=outs_df['mean'] + 2*outs_df['std'], alpha=.25, color='lightblue')
+                     y2=outs_df['mean'] + 2*outs_df['std'], alpha=.25, color='lightblue', label='2σ range')
     plt.legend()
 
 
@@ -220,7 +220,7 @@ def visualise_clf_results(clf_model, x, y, device='cpu'):
                             'proba': np.max(outs, axis=1),
                             'true': ys})
 
-    plt.plot(outs_df.index, outs_df['pred'], label='true')
-    plt.plot(outs_df.index, outs_df['true'], label='pred')
+    plt.plot(outs_df.index, outs_df['pred'], label='pred')
+    plt.plot(outs_df.index, outs_df['true'], label='true')
     plt.bar(outs_df.index, outs_df['proba'], color='gray', alpha=.5, label='pred probability')
     plt.legend()
