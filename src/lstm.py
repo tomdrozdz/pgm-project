@@ -147,7 +147,7 @@ def train_mcdlstm(model: MCDLSTM, train_dl: DataLoader,
         dev_r2 = 1-dev_loss/np.var(dev_y)
         dev_r2s_epoch.append(dev_r2)
 
-        dev_mse = mse_loss(torch.tensor(dev_preds), torch.tensor(dev_y))
+        dev_round_mse = mse_loss(torch.tensor(dev_preds).round(), torch.tensor(dev_y))
         dev_f1 = f1_score(np.rint(dev_y), np.rint(dev_preds), average='macro', zero_division=0)
 
         dev_report = classification_report(np.rint(dev_y), np.rint(dev_preds), zero_division=0)
@@ -155,7 +155,7 @@ def train_mcdlstm(model: MCDLSTM, train_dl: DataLoader,
         if print_progress:
             print(f'Epoch {epoch + 1}')
             print(f'Train loss : {train_loss}, dev loss : {dev_loss}')
-            print(f'Dev MSE : {dev_mse:.3f}, R2: {dev_r2:.3f}, f1: {dev_f1:.3f}')
+            print(f'Dev MSE (rounded outs) : {dev_round_mse:.3f}, R2: {dev_r2:.3f}, f1: {dev_f1:.3f}')
 
         if dev_loss <= dev_loss_min:
             dev_r2_min_loss = dev_r2
