@@ -144,7 +144,7 @@ def train_mcdlstm(model: MCDLSTM, train_dl: DataLoader,
             else:
                 dev_y.extend(y.squeeze().cpu().numpy())
                 if regression:
-                    dev_preds.extend(output.float().cpu().numpu())
+                    dev_preds.extend(output.detach().cpu().numpy().squeeze())
                 else:
                     dev_preds.extend(torch.argmax(output, dim=1).float().cpu().numpy())
 
