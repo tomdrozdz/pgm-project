@@ -76,6 +76,7 @@ def train_mcdlstm(model: MCDLSTM, train_dl: DataLoader,
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     dev_loss_min = np.Inf
+    dev_round_mse_min_loss = None
     dev_r2_min_loss = None
     dev_f1_min_loss = None
     dev_report_min_loss = None
@@ -167,6 +168,7 @@ def train_mcdlstm(model: MCDLSTM, train_dl: DataLoader,
             print(f'Dev MSE (rounded outs) : {dev_round_mse:.3f}, R2: {dev_r2:.3f}, f1: {dev_f1:.3f}')
 
         if dev_loss <= dev_loss_min:
+            dev_round_mse_min_loss = dev_round_mse
             dev_r2_min_loss = dev_r2
             dev_report_min_loss = dev_report
             dev_f1_min_loss = dev_f1
@@ -189,7 +191,7 @@ def train_mcdlstm(model: MCDLSTM, train_dl: DataLoader,
         df_mse.plot.line()
         df_r2.plot.line()
 
-    return dev_loss_min, dev_r2_min_loss, dev_f1_min_loss, dev_report_min_loss
+    return dev_round_mse_min_loss, dev_r2_min_loss, dev_f1_min_loss, dev_report_min_loss
 
 
 def visualise_regr_results(regr_model, x, y, device='cpu'):
