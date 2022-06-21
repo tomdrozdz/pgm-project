@@ -342,7 +342,7 @@ def plot_predict_crf(
 ):
     fig, ax = plt.subplots(ncols=1, nrows=1, figsize=(8, 5))
 
-    if stop is not None:
+    if stop is None:
         stop = len(y)
 
     with torch.no_grad():
@@ -402,6 +402,7 @@ def train_crf(
     patience: int = 50,
     minimum: int = 150,
     name: str = "model",
+    split: int = 0,
     save_figs: bool = False,
 ) -> t.Tuple[float, float, float, float]:
     (X_train, y_train), (X_test, y_test) = dataset
@@ -502,9 +503,9 @@ def train_crf(
     plt.tight_layout()
 
     if save_figs:
-        save_fig(fig, name, "training")
-        save_fig(plot_predict_crf(model, X_test, y_test), name, "predictions")
-        save_fig(plot_transitions(log["transitions"]), name, "transitions")
+        save_fig(fig, name, f"training_{split}")
+        save_fig(plot_predict_crf(model, X_test, y_test), name, f"predictions_{split}")
+        save_fig(plot_transitions(log["transitions"]), name, f"transitions_{split}")
     else:
         plt.show()
         plot_predict_crf(model, X_test, y_test)
