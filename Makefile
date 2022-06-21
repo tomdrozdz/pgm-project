@@ -28,7 +28,7 @@ ${_ENV_READY}: ${_ENV_CREATED}
 env: ${_ENV_READY}
 
 crf: env
-	@./"${VENV_DIR}"/bin/python run_crf.py
+	@./"${VENV_DIR}"/bin/python crf_run.py
 
 bnn: env
 	@./"${VENV_DIR}"/bin/python bnn_run.py
