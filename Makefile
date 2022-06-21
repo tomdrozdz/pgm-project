@@ -11,10 +11,10 @@ _ENV_READY = ${VENV_DIR}/.ready
 
 help:
 	@echo -e "Available targets:"
-	@echo -e \t env - create Python environment
-	@echo -e \t crf - run experiments for CRF
-	@echo -e \t bnn - run experiments for Bayesian Neural Network
-	@echo -e \t lstm - run experiments for Bayesian LSTM
+	@echo -e "    env - create Python environment"
+	@echo -e "    crf - run experiments for CRF"
+	@echo -e "    bnn - run experiments for Bayesian Neural Network"
+	@echo -e "    lstm - run experiments for Bayesian LSTM"
 
 ${_ENV_CREATED}:
 	@rm -rf "${VENV_DIR}"
@@ -23,6 +23,9 @@ ${_ENV_CREATED}:
 
 ${_ENV_READY}: ${_ENV_CREATED}
 	@./${VENV_DIR}/bin/pip install --upgrade -r requirements.txt
+	@./${VENV_DIR}/bin/pip install torch torchvision torchaudio \
+		--extra-index-url https://download.pytorch.org/whl/cu113
+
 	@touch $@
 
 env: ${_ENV_READY}
