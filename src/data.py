@@ -5,6 +5,8 @@ import numpy as np
 import pandas as pd
 import torch
 
+NUM_LABELS = 4
+
 
 def load_data(path: str = "Occupancy_Estimation.csv") -> pd.DataFrame:
     data = pd.read_csv(
@@ -133,7 +135,9 @@ def time_series_split(
     return series
 
 
-def _batch(x: pd.DataFrame, y: pd.Series, seq_len: int, overlap_series: bool):
+def _batch(
+    x: pd.DataFrame, y: pd.Series, seq_len: int, overlap_series: bool, pad: bool
+) -> t.Tuple[torch.Tensor, torch.Tensor]:
     xs = []
     ys = []
 
@@ -149,6 +153,24 @@ def _batch(x: pd.DataFrame, y: pd.Series, seq_len: int, overlap_series: bool):
             bot += seq_len
             top += seq_len
 
+        if pad and bot != len(x):
+            last_x = np.zeros_like(xs[-1])
+            last_y = np.full_like(ys[-1], fill_value=NUM_LABELS)
+
+            real_values = seq_len - (top - len(x))
+            top = len(x)
+
+            print(real_values)
+            print(last_x.shape)
+            print(last_x)
+            print(last_x[:real_values])
+
+            last_x[:real_values] = x.iloc[bot:top].to_numpy()
+            last_y[:real_values] = y.iloc[bot:top].to_numpy()
+
+            xs.append(last_x)
+            ys.append(last_y)
+
     return torch.from_numpy(np.array(xs)).float(), torch.from_numpy(np.array(ys))
 
 
@@ -158,14 +180,11 @@ def batch_dataset(
     ],
     sequence_length: int = 25,
     overlap_series: bool = False,
+    pad: bool = False,
 ) -> t.Tuple[t.Tuple[torch.Tensor, torch.Tensor], t.Tuple[torch.Tensor, torch.Tensor]]:
     (x_train, y_train), (x_test, y_test) = dataset
 
-    x_tr, y_tr = _batch(
-        x_train, y_train, seq_len=sequence_length, overlap_series=overlap_series
-    )
-    x_te, y_te = _batch(
-        x_test, y_test, seq_len=sequence_length, overlap_series=overlap_series
-    )
+    x_tr, y_tr = _batch(x_train, y_train, sequence_length, overlap_series, pad)
+    x_te, y_te = _batch(x_test, y_test, sequence_length, overlap_series, pad)
 
     return (x_tr, y_tr), (x_te, y_te)

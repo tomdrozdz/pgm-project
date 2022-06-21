@@ -1,13 +1,16 @@
 import typing as t
+from collections import defaultdict
 
 import matplotlib.pyplot as plt
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import torch
-from sklearn.metrics import classification_report, f1_score
+from sklearn.metrics import classification_report, f1_score, mean_squared_error
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
-from tqdm.auto import trange
+
+from .utils import load_model_state, save_fig, save_model
 
 
 class CRF(nn.Module):
@@ -249,97 +252,16 @@ class CRF(nn.Module):
         return best_path[::-1]
 
 
-class SequenceClassifier(nn.Module):
-    """Helper class for implementing sequence classifier."""
-
-    def __init__(self, nb_labels: int, x_size: int):
-        """
-        :param nb_labels: number of labels in the target (shape of the output layer)
-        :param x_size: size of x input to determin first layer size
-        """
+class MLPCRFClassifier(nn.Module):
+    def __init__(self, hidden_sizes: t.List[int], nb_labels: int, x_size: int):
         super().__init__()
         self.nb_labels = nb_labels
         self.x_size = x_size
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Pass data through the model.
-
-        .. note: this function should return values used for calculating the loss function
-        """
-        raise NotImplementedError
-
-    def predict(self, x: torch.Tensor) -> torch.Tensor:
-        """Run prediction on given data.
-
-        .. note: this function should return labels for all corresponding features
-
-        :param x: input features tensor of shape (batch_size, seq_length, x_size)
-        :returns: labels tensor of shape (batch_size, seq_length,)
-        """
-        raise NotImplementedError
-
-
-class MLPClassifier(SequenceClassifier):
-    """Simple MLP model, treating sequences as IID."""
-
-    def __init__(self, hidden_sizes: t.Optional[t.List[int]] = None, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        hidden_sizes = [self.x_size, *(hidden_sizes or [])]
-        self.mlp = nn.ModuleList(
-            [
-                nn.Linear(in_size, out_size)
-                for in_size, out_size in zip(hidden_sizes, hidden_sizes[1:])
-            ]
-        )
-        self.out = nn.Linear(hidden_sizes[-1], self.nb_labels)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x.view(*x.shape[:2], -1)
-        batch_size, seq_length, h_size = x.shape
-
-        x = x.view(-1, h_size)
-        for layer in self.mlp:
-            x = torch.relu(layer(x))
-        x = self.out(x)
-
-        return x.view(batch_size, seq_length, self.nb_labels)
-
-    def predict(self, x: torch.Tensor) -> torch.Tensor:
-        y = self.forward(x)
-        softmaxed = torch.log_softmax(y, dim=-1)
-        return torch.max(softmaxed, dim=-1)[1]
-
-
-def mlp_loss(
-    y_pred: torch.Tensor,
-    y_true: torch.Tensor,
-    mask: t.Optional[torch.Tensor],
-    model: MLPClassifier,
-) -> torch.Tensor:
-    """Loss for evaluating MLP Classifier performance.
-
-    .. note: model is not used here.
-    """
-    criterion = nn.CrossEntropyLoss()
-
-    if mask is None:
-        mask = torch.ones(y_true.shape[:2], dtype=torch.bool)
-
-    return criterion(y_pred[mask], y_true[mask])
-
-
-class MLPCRFClassifier(SequenceClassifier):
-    """Simple MLP model with CRF."""
-
-    def __init__(self, hidden_sizes=None, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
         self.crf = CRF(self.nb_labels)
 
-        # prepare model's layers and assign to the model according to `hidden_sizes`
         hidden_sizes = [self.x_size, *(hidden_sizes or [])]
-        layers = []
+        layers: t.List[nn.Module] = []
 
         for in_size, out_size in zip(hidden_sizes, hidden_sizes[1:]):
             layers.append(nn.Linear(in_size, out_size))
@@ -349,7 +271,6 @@ class MLPCRFClassifier(SequenceClassifier):
         self.mlp = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # forward data through the model to generate emissions
         x = x.view(*x.shape[:2], -1)
         batch_size, seq_length, h_size = x.shape
         x = x.view(-1, h_size)
@@ -388,134 +309,28 @@ def get_mask(X: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     return mask
 
 
-def train_crf(
-    model: SequenceClassifier,
-    loss_fn: t.Callable[
-        [torch.Tensor, torch.Tensor, t.Optional[torch.Tensor], SequenceClassifier],
-        torch.Tensor,
-    ],
-    dataset: t.Tuple[
-        t.Tuple[torch.Tensor, torch.Tensor], t.Tuple[torch.Tensor, torch.Tensor]
-    ],
-    n_epochs: int,
-    lr: float = 0.001,
-    batch_size: int = 32,
-    use_mask: bool = False,
-    log_transitions: bool = False,
-):
-    """Training loop.
-
-    :param model: SequenceClassifier instance
-    :param loss_fn: callable, which receives feature vector and labels,
-        ptional mask and model and calculates the loss function
-        for training the model
-    :param dataset: tuple (X_train, y_train), (X_test, y_test)
-        containing train and test dataset
-    :param n_epochs: number of epochs to use for training
-    :param lr: learning rate to be used in Adam optimizer
-    :param batch_size: batch_size set for training the model
-    :param use_mask: boolean flag whether to look for padding values in data
-    :param log_transitions: boolean flag whether to log transitions values
-        during training (used for models with CRF)
-    :returns: trained model and logging dictionary
-    """
-    (X_train, y_train), (X_test, y_test) = dataset
+def crf_evaluate(model, loss_fn, dl, use_mask):
     mask = None
+    pred_list = []
+    true_list = []
+    losses = []
 
-    # X_train, y_train = X_train.cuda(), y_train.cuda()
-    # X_test, y_test = X_test.cuda(), y_test.cuda()
+    with torch.no_grad():
+        for X, y in dl:
+            if use_mask:
+                mask = get_mask(X, y)
 
-    train_dataset = TensorDataset(X_train, y_train)
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    test_dataset = TensorDataset(X_test, y_test)
-    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+            y_pred = model(X)
+            loss = loss_fn(y_pred, y, mask, model)
+            losses.append(loss.item())
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+            pred_list.append(model.predict(X).view(-1))
+            true_list.append(y.view(-1))
 
-    log: t.Dict[str, t.List[float]] = {
-        "train_loss": [],
-        "test_loss": [],
-        "train_f1": [],
-        "test_f1": [],
-    }
-    transitions = []
+        pred = torch.cat(pred_list).cpu()
+        true = torch.cat(true_list).cpu()
 
-    for _ in trange(n_epochs):
-        train_pred_list = []
-        train_true_list = []
-        test_pred_list = []
-        test_true_list = []
-        train_losses = []
-        test_losses = []
-
-        try:
-            model.zero_grad()
-            # train
-            for X, y in train_dataloader:
-                if use_mask:
-                    mask = get_mask(X, y)
-
-                y_pred = model(X)
-                loss = loss_fn(y_pred, y, mask, model)
-                loss.backward()
-                optimizer.step()
-
-                train_losses.append(loss.detach().cpu().item())
-                with torch.no_grad():
-                    train_true_list.append(y.view(-1))
-                    train_pred_list.append(model.predict(X).view(-1))
-
-            # eval
-            with torch.no_grad():
-                for X, y in test_dataloader:
-                    if use_mask:
-                        mask = get_mask(X, y)
-
-                    y_pred = model(X)
-                    loss = loss_fn(y_pred, y, mask, model)
-                    test_losses.append(loss.item())
-
-                    test_pred_list.append(model.predict(X).view(-1))
-                    test_true_list.append(y.view(-1))
-
-                train_pred = torch.cat(train_pred_list).cpu()
-                train_true = torch.cat(train_true_list).cpu()
-                test_pred = torch.cat(test_pred_list).cpu()
-                test_true = torch.cat(test_true_list).cpu()
-
-            # log
-            log["train_loss"].append(np.mean(train_losses))
-            log["test_loss"].append(np.mean(test_losses))
-            log["train_f1"].append(f1_score(train_true, train_pred, average="macro"))
-            log["test_f1"].append(f1_score(test_true, test_pred, average="macro"))
-            if log_transitions:
-                trans = model.crf.transitions.detach().cpu().numpy()  # type: ignore
-                transitions.append(trans.copy())
-
-        except KeyboardInterrupt:
-            break
-
-    fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(14, 5))
-
-    df = pd.DataFrame(log).reset_index().rename(columns={"index": "epoch"})
-    df.plot(
-        x="epoch",
-        y=["train_loss", "test_loss"],
-        ax=axes[0],
-    )
-    df.plot(
-        x="epoch",
-        y=["train_f1", "test_f1"],
-        secondary_y=["train_f1", "test_f1"],
-        ax=axes[1],
-    )
-
-    print(classification_report(test_true, test_pred, zero_division=0))
-
-    if log_transitions:
-        log["transitions"] = transitions
-
-    return model, log
+    return np.mean(losses), true, pred
 
 
 def plot_predict_crf(
@@ -525,7 +340,9 @@ def plot_predict_crf(
     start: int = 0,
     stop: t.Optional[int] = None,
 ):
-    if stop is not None:
+    fig, ax = plt.subplots(ncols=1, nrows=1, figsize=(8, 5))
+
+    if stop is None:
         stop = len(y)
 
     with torch.no_grad():
@@ -537,4 +354,163 @@ def plot_predict_crf(
             "true": y_test.cpu(),
             "pred": y_pred.cpu(),
         }
-    ).plot(lw=0.7, figsize=(10, 5))
+    ).plot(lw=0.7, ax=ax)
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_transitions(transitions: t.List[npt.NDArray]):
+    """Display how transitions weights changed throughout training.
+
+    .. note: we limit ourselves to only 7 first labels for the sake of performance
+        and do not consider padding axis (it is not trained)
+    """
+    size = min(transitions[0].shape[0] - 1, 7)
+    fig, axes = plt.subplots(size, size, sharex=True, sharey=True, figsize=(7, 7))
+
+    x = list(range(len(transitions)))
+    t = np.array(transitions).transpose(1, 2, 0)[:size, :size]
+
+    for ax_row, val_row in zip(axes, t):
+        for ax, val in zip(ax_row, val_row):
+            ax.plot(x, val)
+
+    for i, ax in enumerate(axes[-1, :]):
+        ax.set_xlabel(i)
+
+    for i, ax in enumerate(axes[:, 0]):
+        ax.set_ylabel(i)
+
+    plt.tight_layout()
+    return fig
+
+
+def train_crf(
+    model: MLPCRFClassifier,
+    loss_fn: t.Callable[
+        [torch.Tensor, torch.Tensor, t.Optional[torch.Tensor], MLPCRFClassifier],
+        torch.Tensor,
+    ],
+    dataset: t.Tuple[
+        t.Tuple[torch.Tensor, torch.Tensor], t.Tuple[torch.Tensor, torch.Tensor]
+    ],
+    n_epochs: int = 1000,
+    lr: float = 0.001,
+    batch_size: int = 32,
+    use_mask: bool = False,
+    patience: int = 50,
+    minimum: int = 150,
+    name: str = "model",
+    split: int = 0,
+    save_figs: bool = False,
+) -> t.Tuple[float, float, float, float]:
+    (X_train, y_train), (X_test, y_test) = dataset
+    mask = None
+    best_loss = float("+inf")
+    loss_increases = 0
+
+    # X_train, y_train = X_train.cuda(), y_train.cuda()
+    # X_test, y_test = X_test.cuda(), y_test.cuda()
+
+    train_dataset = TensorDataset(X_train, y_train)
+    train_dl = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    test_dataset = TensorDataset(X_test, y_test)
+    test_dl = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+
+    log: t.Dict[str, t.List] = defaultdict(list)
+
+    for epoch in range(1, n_epochs + 1):
+        train_pred_list = []
+        train_true_list = []
+        train_losses = []
+
+        model.zero_grad()
+        # train
+        for X, y in train_dl:
+            if use_mask:
+                mask = get_mask(X, y)
+
+            y_pred = model(X)
+            loss = loss_fn(y_pred, y, mask, model)
+            loss.backward()
+            optimizer.step()
+
+            train_losses.append(loss.detach().cpu().item())
+            with torch.no_grad():
+                train_true_list.append(y.view(-1))
+                train_pred_list.append(model.predict(X).view(-1))
+
+        # eval
+        test_loss, test_true, test_pred = crf_evaluate(
+            model, loss_fn=loss_fn, dl=test_dl, use_mask=use_mask
+        )
+
+        train_pred = torch.cat(train_pred_list).cpu()
+        train_true = torch.cat(train_true_list).cpu()
+
+        # log
+        log["epoch"].append(epoch)
+        log["train_loss"].append(np.mean(train_losses))
+        log["test_loss"].append(test_loss)
+        log["train_f1"].append(f1_score(train_true, train_pred, average="macro"))
+        log["test_f1"].append(f1_score(test_true, test_pred, average="macro"))
+        log["train_mse"].append(mean_squared_error(train_true, train_pred))
+        log["test_mse"].append(mean_squared_error(test_true, test_pred))
+
+        trans: npt.NDArray = model.crf.transitions.detach().cpu().numpy()
+        log["transitions"].append(trans.copy())
+
+        if test_loss > best_loss:
+            loss_increases += 1
+        else:
+            loss_increases = 0
+            best_loss = test_loss
+
+        if loss_increases >= patience and epoch >= minimum or epoch == n_epochs:
+            epoch_to_load = epoch - loss_increases
+
+            if epoch_to_load != n_epochs:
+                load_model_state(model, epoch_to_load, name)
+                print(f"Test loss increased {loss_increases} times, early stopping...")
+                print(f"Loading model from epoch {epoch_to_load}\n")
+                break
+        else:
+            save_model(model, epoch, name)
+
+    test_loss, test_true, test_pred = crf_evaluate(
+        model, loss_fn=loss_fn, dl=test_dl, use_mask=use_mask
+    )
+
+    f1_macro = f1_score(test_true, test_pred, average="macro")
+    mse = mean_squared_error(test_true, test_pred)
+    f1_micro = f1_score(test_true, test_pred, average="micro")
+
+    print(f"Test loss: {test_loss}")
+    print(f"Test F1 (macro): {f1_macro}")
+    print(f"Test MSE: {mse}")
+    print(f"Test F1 (micro): {f1_micro}\n")
+
+    print(classification_report(test_true, test_pred, zero_division=0))
+
+    fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(18, 5))
+    df = pd.DataFrame(log)
+    df.plot(x="epoch", y=["train_loss", "test_loss"], ax=axes[0])
+    df.plot(x="epoch", y=["train_mse", "test_mse"], ax=axes[1])
+    df.plot(x="epoch", y=["train_f1", "test_f1"], ax=axes[2])
+    plt.tight_layout()
+
+    if save_figs:
+        save_fig(fig, name, f"training_{split}")
+        save_fig(plot_predict_crf(model, X_test, y_test), name, f"predictions_{split}")
+        save_fig(plot_transitions(log["transitions"]), name, f"transitions_{split}")
+    else:
+        plt.show()
+        plot_predict_crf(model, X_test, y_test)
+        plt.show()
+        plot_transitions(log["transitions"])
+        plt.show()
+
+    return test_loss, f1_macro, mse, f1_micro
