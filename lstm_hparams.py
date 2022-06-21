@@ -12,6 +12,8 @@ MODELS_PATH = Path("models")
 RESULTS_PATH = Path("results")
 MODELS_PATH.mkdir(exist_ok=True)
 RESULTS_PATH.mkdir(exist_ok=True)
+(MODELS_PATH / "lstm").mkdir(exist_ok=True)
+(RESULTS_PATH / "lstm").mkdir(exist_ok=True)
 
 FIRST_TUNING_FILE = 'hp_tuning_1.pkl'
 SECOND_TUNING_FILE = 'hp_tuning_2.pkl'

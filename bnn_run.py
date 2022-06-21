@@ -1,9 +1,17 @@
 import numpy as np
 import torch
-from src.bnn import BayesianMLP, BayesianMLP2, ELBO, fit_elbo, show_learning_curve, show_accuracy_curve
-from src.data import load_data, time_series_split
-
 from sklearn.metrics import classification_report
+
+from src.bnn import (
+    ELBO,
+    BayesianMLP,
+    BayesianMLP2,
+    fit_elbo,
+    show_accuracy_curve,
+    show_learning_curve,
+)
+from src.data import load_data, time_series_split
+from src.utils import ensure_reproducibility
 
 df = load_data()
 
@@ -60,6 +68,8 @@ def search_hyperparams(df, exp_name, lr=0.01, hidden_size=64, layers=1, images=F
 
 
 if __name__ == '__main__':
+    ensure_reproducibility()
+
     for lr in [0.01, 0.001, 0.0001]:
         search_hyperparams(df, 'lr_check', lr, 64)
     for hs in [16, 64, 128]:
