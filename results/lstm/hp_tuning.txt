@@ -1,0 +1,9 @@
+Example Learning curve for best regression model: models/regr_1655724665_mse.png
+
+Best parameters for regression model:
+   hidden_dim  no_layers  sequence_length  drop_prob     lr  mse_mean   f1_mean
+0          64          3               15        0.5  0.003  0.133214  0.658521
+
+Best parameters for classification model:
+   hidden_dim  no_layers  sequence_length  drop_prob      lr  mse_mean   f1_mean
+0          32          4               15        0.5  0.0001   0.17337  0.627478
