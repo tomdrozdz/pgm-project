@@ -1,17 +1,20 @@
+import pickle
 import time
 
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
-from sklearn.metrics import f1_score, classification_report
+from sklearn.metrics import f1_score, classification_report, mean_squared_error
+from sklearn.model_selection import ParameterGrid
 from sklearn.preprocessing import MinMaxScaler
 from torch import nn
 import pandas as pd
+from torch.nn import MSELoss
 from torch.nn.functional import softmax, one_hot
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
-from src.data import batch_dataset
+from src.data import batch_dataset, time_series_split
 
 
 class MCDLSTM(nn.Module):
@@ -189,8 +192,9 @@ def train_mcdlstm(model: MCDLSTM, train_dl: DataLoader,
         else:
             no_improv_epoch_count += 1
         if no_improv_epoch_count == patience:
-            print('Early stop.')
-            print(f'Best dev loss: {dev_loss_min}')
+            if print_progress:
+                print('Early stop.')
+                print(f'Best dev loss: {dev_loss_min}')
             break
 
     best_state = torch.load(save_prefix + '_state_dict.pt')
@@ -218,36 +222,44 @@ def train_mcdlstm(model: MCDLSTM, train_dl: DataLoader,
     return dev_round_mse_min_loss, dev_r2_min_loss, dev_f1_min_loss, dev_report_min_loss
 
 
-def visualise_regr_results(regr_model, x, y, device='cpu'):
+def visualise_regr_results(regr_model, x, y, device='cpu', show_charts=True, chart_len_limit=1000):
     test_ds = TensorDataset(x, y)
     test_dl = DataLoader(test_ds, batch_size=64, shuffle=False)
 
     outs = []
     ys = []
-    for x, y in test_dl:
+    for x, y in tqdm(test_dl):
         outs.append(np.array(regr_model.estimate_distributions(x.to(device), n_samples=100)).transpose())
         ys.extend(y.numpy()[:,-1])
 
     outs = np.vstack(outs)
     outs_df = pd.DataFrame({'mean': outs[:,0], 'std': outs[:,1], 'trues': ys})
 
-    plt.plot(outs_df.index, outs_df['mean'], label='pred')
-    plt.plot(outs_df.index, outs_df['trues'], label='true')
-    plt.fill_between(outs_df.index, y1=outs_df['mean']-outs_df['std'],
-                     y2=outs_df['mean'] + outs_df['std'], alpha=.5, color='lightblue', label='1σ range')
-    plt.fill_between(outs_df.index, y1=outs_df['mean']-2*outs_df['std'],
-                     y2=outs_df['mean'] + 2*outs_df['std'], alpha=.25, color='lightblue', label='2σ range')
-    plt.legend()
+    mse = mean_squared_error(outs_df['trues'], np.rint(outs_df['mean']))
+    f1 = f1_score(outs_df['trues'], np.rint(outs_df['mean']), average='macro')
+
+    outs_df = outs_df[0:chart_len_limit]
+
+    if show_charts:
+        plt.plot(outs_df.index, outs_df['mean'], label='pred')
+        plt.plot(outs_df.index, outs_df['trues'], label='true')
+        plt.fill_between(outs_df.index, y1=outs_df['mean']-outs_df['std'],
+                         y2=outs_df['mean'] + outs_df['std'], alpha=.5, color='lightblue', label='1σ range')
+        plt.fill_between(outs_df.index, y1=outs_df['mean']-2*outs_df['std'],
+                         y2=outs_df['mean'] + 2*outs_df['std'], alpha=.25, color='lightblue', label='2σ range')
+        plt.legend()
+
+    return f1, mse
 
 
-def visualise_clf_results(clf_model, x, y, device='cpu'):
+def visualise_clf_results(clf_model, x, y, device='cpu', show_charts=True, chart_len_limit=800):
     test_ds = TensorDataset(x, y)
     test_dl = DataLoader(test_ds, batch_size=64, shuffle=False)
     outs = []
     ys = []
-    for x, y in test_dl:
+    for x, y in tqdm(test_dl):
         outs.append(np.array(clf_model.estimate_distributions(x.to(device), n_samples=100)))
-        ys.extend(y.numpy()[:,-1])
+        ys.extend(y.numpy()[:, -1])
 
     outs = np.vstack(outs)
 
@@ -255,17 +267,27 @@ def visualise_clf_results(clf_model, x, y, device='cpu'):
                             'proba': np.max(outs, axis=1),
                             'true': ys})
 
-    plt.plot(outs_df.index, outs_df['pred'], label='pred')
-    plt.plot(outs_df.index, outs_df['true'], label='true')
-    plt.bar(outs_df.index, outs_df['proba'], color='gray', alpha=.5, label='pred probability')
-    plt.legend()
+    mse = mean_squared_error(outs_df['true'], np.rint(outs_df['pred']))
+    f1 = f1_score(outs_df['true'], np.rint(outs_df['pred']), average='macro')
+
+    outs_df = outs_df[0:chart_len_limit]
+
+    if show_charts:
+        plt.plot(outs_df.index, outs_df['pred'], label='pred')
+        plt.plot(outs_df.index, outs_df['true'], label='true')
+        plt.fill_between(outs_df.index, outs_df['proba'], color='gray', alpha=.5, label='pred probability')
+        plt.legend()
+
+    return mse, f1
 
 
 def evaluate_hparams(data_series, sequence_length=10, no_layers=3,
                      hidden_dim=64, drop_prob=0.5, regression=False,
-                     batch_size=32, epochs=200, patience=10, lr=0.00001, silent=False):
+                     batch_size=32, epochs=200, patience=10, lr=0.00001, silent=False,
+                     save_dir='models'):
     f1_vals = []
     mse_vals = []
+    save_prefixes = []
     scaler = MinMaxScaler()
     for s in data_series:
 
@@ -283,7 +305,8 @@ def evaluate_hparams(data_series, sequence_length=10, no_layers=3,
         out_dim = 1 if regression else 4
         mcdLSTM = MCDLSTM(no_layers=no_layers, input_size=12, hidden_dim=hidden_dim, output_dim=out_dim, drop_prob=drop_prob, device=device).to(device)
 
-        save_prefix = 'models/' + ('regr_' if regression else 'clf_') + str(int(time.time()))
+        save_prefix = save_dir + '/' + ('regr_' if regression else 'clf_') + str(int(time.time()))
+        save_prefixes.append(save_prefix)
 
         mse, r2, f1, report = train_mcdlstm(mcdLSTM, train_dl, test_dl, regression=regression,
                                             epochs=epochs, lr=lr, patience=patience,
@@ -299,4 +322,52 @@ def evaluate_hparams(data_series, sequence_length=10, no_layers=3,
         mse_vals.append(mse)
     if not silent:
         print(f'Avg mse: {np.mean(mse_vals)}, f1: {np.mean(f1_vals)}')
-    return mse_vals, f1_vals, save_prefix
+    return mse_vals, f1_vals, save_prefixes
+
+
+def hp_tuning(df: pd.DataFrame, param_grid: dict, out_file: str, epochs=300, patience=10, save_dir='models'):
+    torch.manual_seed(11)
+    np.random.seed(11)
+    splitted_series = time_series_split(df)
+    param_grid = ParameterGrid(param_grid)
+    outs = []
+    res_df = None
+    for params in tqdm(param_grid):
+        mse_vals, f1_vals, save_prefixes = evaluate_hparams(splitted_series, silent=True,
+                                                          epochs=epochs, patience=patience, save_dir=save_dir, **params)
+        for i in range(len(mse_vals)):
+            params['mse_val_'+str(i)] = mse_vals
+            params['f1_val_'+str(i)] = f1_vals
+            params['prefix_'+str(i)] = save_prefixes
+        params['mse_mean'] = np.mean(mse_vals)
+        params['mse_std'] = np.std(mse_vals)
+        params['f1_mean'] = np.mean(f1_vals)
+        params['f1_std'] = np.std(f1_vals)
+
+        outs.append(params)
+        res_df = pd.DataFrame.from_records(outs)
+        with open(out_file, 'wb') as f:
+            pickle.dump(obj=res_df, file=f)
+        print(f'Mean mse: {params["mse_mean"]:.3f}, f1: {params["f1_mean"]:.3f}')
+    return res_df
+
+
+def get_best_param_model(hp_tuning_results_file: str, regression: bool, split: int, device='cpu'):
+    with open(hp_tuning_results_file, 'rb') as f:
+        res_df = pickle.load(file=f)
+    best_params = res_df[res_df['regression'] == regression].sort_values(['mse_mean']).iloc[0,:].to_dict()
+    out_dim = 1 if regression else 4
+    model = MCDLSTM(no_layers=best_params['no_layers'], input_size=12, hidden_dim=best_params['hidden_dim'],
+            output_dim=out_dim, drop_prob=best_params['drop_prob'], device=device)
+    best_state = torch.load(best_params['prefix_'+str(split)]+'_state_dict.pt', map_location=device)
+    model.load_state_dict(best_state)
+    return model, best_params['sequence_length'], best_params['f1_val_'+str(split)], best_params['mse_val_'+str(split)]
+
+
+# get results for single parameter from hyperparameter tuning results (hp_tuning())
+def get_param_results(res_df: pd.DataFrame, param: str, regression: bool):
+    params = {'drop_prob', 'lr', 'no_layers', 'sequence_length', 'hidden_dim', 'regression'}
+    best_params = res_df[res_df['regression'] == regression].sort_values(['mse_mean']).iloc[0,:].to_dict()
+    best_params = {param: best_params[param] for param in params}
+    del best_params[param]
+    return res_df.loc[np.all(res_df[list(best_params)] == pd.Series(best_params), axis=1)]
