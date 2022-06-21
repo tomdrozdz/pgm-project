@@ -7,6 +7,7 @@ from tqdm.auto import tqdm
 from torch.nn.functional import one_hot
 import matplotlib.pyplot as plt
 from sklearn.metrics import f1_score
+import numpy as np
 
 
 class TwoGaussianMixturePrior:
@@ -135,6 +136,24 @@ class BayesianMLP(nn.Module):
         return log_prob
 
 
+class BayesianMLP2(BayesianMLP):
+    def __init__(
+            self,
+            num_input_features: int,
+            num_hidden_features: int,
+            num_output_classes: int,
+            prior: TwoGaussianMixturePrior = None
+    ):
+        super().__init__(num_input_features, num_hidden_features, num_output_classes, prior)
+        self.mid_layer = BayesianLinear(num_hidden_features, num_hidden_features, prior or TwoGaussianMixturePrior())
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.sigmoid(self.layer_1(x))
+        x = self.sigmoid(self.mid_layer(x))
+        x = self.softmax(self.layer_2(x))
+        return x
+
+
 class ELBO(nn.Module):
     def __init__(self, N: int):
         super().__init__()
@@ -173,14 +192,14 @@ class ELBO(nn.Module):
 
 
 def fit_elbo(
-    model: nn.Module,
-    dataset: t.Tuple[
-        t.Tuple[torch.Tensor, torch.Tensor], t.Tuple[torch.Tensor, torch.Tensor]
-    ],
-    loss_function: nn.Module,
-    batch_size: int,
-    epochs: int,
-    optimizer: torch.optim.Optimizer,
+        model: nn.Module,
+        dataset: t.Tuple[
+            t.Tuple[torch.Tensor, torch.Tensor], t.Tuple[torch.Tensor, torch.Tensor]
+        ],
+        loss_function: nn.Module,
+        batch_size: int,
+        epochs: int,
+        optimizer: torch.optim.Optimizer,
 ):
     train_metrics = {"loss": [], "acc": [], "step": []}
     test_metrics = {"loss": [], "acc": [], "step": []}
@@ -255,11 +274,12 @@ def fit_elbo(
 
 
 def plot_predict_bnn(
-    model,
-    x: torch.Tensor,
-    y: torch.Tensor,
-    start: int = 0,
-    stop=None,
+        model,
+        x: torch.Tensor,
+        y: torch.Tensor,
+        start: int = 0,
+        stop=None,
+        n_samples=100
 ):
     if stop is not None:
         stop = len(y)
@@ -268,16 +288,25 @@ def plot_predict_bnn(
         y_pred = model(x).argmax(dim=1)[start:stop]
         y_test = y[start:stop]
 
+        out_arr = torch.zeros((y_pred.shape[0], 4))
+        for i in range(n_samples):
+            out = model(x)
+            out_oneh = one_hot(torch.argmax(out, dim=1), num_classes=4)
+            out_arr[:, :] += out_oneh
+
+        outs = out_arr.numpy() / n_samples
+
     pd.DataFrame(
         {
             "true": y_test,
             "pred": y_pred,
+            'proba': np.max(outs, axis=1),
         }
     ).plot(lw=0.7, figsize=(10, 5))
 
 
 def show_learning_curve(
-    train_metrics: t.Dict[str, t.List[float]], test_metrics: t.Dict[str, t.List[float]]
+        train_metrics: t.Dict[str, t.List[float]], test_metrics: t.Dict[str, t.List[float]]
 ) -> plt.Figure:
     fig, ax = plt.subplots(1, 1, figsize=(12, 8))
     ax.plot(train_metrics["step"], train_metrics["loss"], label="train")
@@ -289,7 +318,7 @@ def show_learning_curve(
 
 
 def show_accuracy_curve(
-    train_metrics: t.Dict[str, t.List[float]], test_metrics: t.Dict[str, t.List[float]]
+        train_metrics: t.Dict[str, t.List[float]], test_metrics: t.Dict[str, t.List[float]]
 ) -> plt.Figure:
     fig, ax = plt.subplots(1, 1, figsize=(12, 8))
     plt.plot(train_metrics["step"], train_metrics["acc"], label="train")
@@ -298,4 +327,3 @@ def show_accuracy_curve(
     ax.set_ylabel("F1")
     ax.set_title("F1 curve")
     plt.legend()
-
