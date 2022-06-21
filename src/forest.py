@@ -3,7 +3,7 @@ import typing as t
 import pandas as pd
 import torch
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report
+from sklearn.metrics import classification_report, mean_squared_error
 
 
 def train_forest(
@@ -16,6 +16,7 @@ def train_forest(
 
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
+    print(f"MSE: {mean_squared_error(y_test, y_pred)}")
     print(classification_report(y_test, y_pred, zero_division=0))
 
     return model
