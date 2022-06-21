@@ -237,6 +237,7 @@ def visualise_regr_results(regr_model, x, y, device='cpu', show_charts=True, cha
 
     mse = mean_squared_error(outs_df['trues'], np.rint(outs_df['mean']))
     f1 = f1_score(outs_df['trues'], np.rint(outs_df['mean']), average='macro')
+    clf_report = classification_report(outs_df['trues'], np.rint(outs_df['mean']), zero_division=0)
 
     outs_df = outs_df[0:chart_len_limit]
 
@@ -249,7 +250,7 @@ def visualise_regr_results(regr_model, x, y, device='cpu', show_charts=True, cha
                          y2=outs_df['mean'] + 2*outs_df['std'], alpha=.25, color='lightblue', label='2σ range')
         plt.legend()
 
-    return f1, mse
+    return f1, mse, clf_report
 
 
 def visualise_clf_results(clf_model, x, y, device='cpu', show_charts=True, chart_len_limit=800):
@@ -269,6 +270,7 @@ def visualise_clf_results(clf_model, x, y, device='cpu', show_charts=True, chart
 
     mse = mean_squared_error(outs_df['true'], np.rint(outs_df['pred']))
     f1 = f1_score(outs_df['true'], np.rint(outs_df['pred']), average='macro')
+    clf_report = classification_report(outs_df['true'], np.rint(outs_df['pred']), zero_division=0)
 
     outs_df = outs_df[0:chart_len_limit]
 
@@ -278,13 +280,13 @@ def visualise_clf_results(clf_model, x, y, device='cpu', show_charts=True, chart
         plt.fill_between(outs_df.index, outs_df['proba'], color='gray', alpha=.5, label='pred probability')
         plt.legend()
 
-    return mse, f1
+    return mse, f1, clf_report
 
 
 def evaluate_hparams(data_series, sequence_length=10, no_layers=3,
                      hidden_dim=64, drop_prob=0.5, regression=False,
                      batch_size=32, epochs=200, patience=10, lr=0.00001, silent=False,
-                     save_dir='models'):
+                     save_dir='models', device='cpu'):
     f1_vals = []
     mse_vals = []
     save_prefixes = []
@@ -293,8 +295,6 @@ def evaluate_hparams(data_series, sequence_length=10, no_layers=3,
 
         s = (pd.DataFrame(scaler.fit_transform(s[0][0])), s[0][1]), (pd.DataFrame(scaler.transform(s[1][0])), s[1][1])
         (seq_x_train, seq_y_train), (seq_x_test, seq_y_test) = batch_dataset(s, sequence_length=sequence_length, overlap_series=True)
-
-        device = 'cuda:0'
 
         train_ds = TensorDataset(seq_x_train, seq_y_train)
         train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
@@ -325,20 +325,29 @@ def evaluate_hparams(data_series, sequence_length=10, no_layers=3,
     return mse_vals, f1_vals, save_prefixes
 
 
-def hp_tuning(df: pd.DataFrame, param_grid: dict, out_file: str, epochs=300, patience=10, save_dir='models'):
-    torch.manual_seed(11)
-    np.random.seed(11)
+def hp_tuning(df: pd.DataFrame, param_grid: dict, out_file: str, epochs=300, patience=10, save_dir='models', overwrite=False, device='cpu'):
+    try:
+        with open(out_file, 'rb') as f:
+            old_df = pickle.load(file=f)
+    except:
+        old_df = None
     splitted_series = time_series_split(df)
     param_grid = ParameterGrid(param_grid)
     outs = []
     res_df = None
     for params in tqdm(param_grid):
-        mse_vals, f1_vals, save_prefixes = evaluate_hparams(splitted_series, silent=True,
+        # check if results already exist in file for current params
+        if not overwrite and \
+                old_df is not None and \
+                len(old_df.loc[np.all(old_df[list(params)] == pd.Series(params), axis=1)]) > 0:
+            print(f'Results for params {str(params)} already exists, use overwrite=True to enable overwriting')
+            continue
+        mse_vals, f1_vals, save_prefixes = evaluate_hparams(splitted_series, silent=True, device=device,
                                                           epochs=epochs, patience=patience, save_dir=save_dir, **params)
         for i in range(len(mse_vals)):
-            params['mse_val_'+str(i)] = mse_vals
-            params['f1_val_'+str(i)] = f1_vals
-            params['prefix_'+str(i)] = save_prefixes
+            params['mse_val_'+str(i)] = mse_vals[i]
+            params['f1_val_'+str(i)] = f1_vals[i]
+            params['prefix_'+str(i)] = save_prefixes[i]
         params['mse_mean'] = np.mean(mse_vals)
         params['mse_std'] = np.std(mse_vals)
         params['f1_mean'] = np.mean(f1_vals)
@@ -365,9 +374,12 @@ def get_best_param_model(hp_tuning_results_file: str, regression: bool, split: i
 
 
 # get results for single parameter from hyperparameter tuning results (hp_tuning())
-def get_param_results(res_df: pd.DataFrame, param: str, regression: bool):
+def get_param_results(res_df: pd.DataFrame, param: str, regression: bool, other_params=None,):
     params = {'drop_prob', 'lr', 'no_layers', 'sequence_length', 'hidden_dim', 'regression'}
-    best_params = res_df[res_df['regression'] == regression].sort_values(['mse_mean']).iloc[0,:].to_dict()
+    if other_params is not None:
+        best_params = other_params
+    else:
+        best_params = res_df[res_df['regression'] == regression].sort_values(['mse_mean']).iloc[0,:].to_dict()
     best_params = {param: best_params[param] for param in params}
     del best_params[param]
     return res_df.loc[np.all(res_df[list(best_params)] == pd.Series(best_params), axis=1)]
