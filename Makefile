@@ -31,9 +31,9 @@ crf: env
 	@./"${VENV_DIR}"/bin/python run_crf.py
 
 bnn: env
+	@./"${VENV_DIR}"/bin/python bnn_run.py
+
+lstm: env
 	@./"${VENV_DIR}"/bin/python lstm_hparams.py
 	@./"${VENV_DIR}"/bin/python lstm_params_charts.py
 	@./"${VENV_DIR}"/bin/python lstm_evaluation.py
-
-lstm: env
-	@./"${VENV_DIR}"/bin/python run_
