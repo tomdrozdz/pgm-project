@@ -160,11 +160,6 @@ def _batch(
             real_values = seq_len - (top - len(x))
             top = len(x)
 
-            print(real_values)
-            print(last_x.shape)
-            print(last_x)
-            print(last_x[:real_values])
-
             last_x[:real_values] = x.iloc[bot:top].to_numpy()
             last_y[:real_values] = y.iloc[bot:top].to_numpy()
 
